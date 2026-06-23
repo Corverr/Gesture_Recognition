@@ -1,0 +1,30 @@
+# Виртуальное окружение
+.venv/
+venv/
+env/
+
+# Данные
+data/raw/
+data/processed/
+
+# Результаты
+results/
+
+# Кэш Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Логи
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Файлы с секретами
+.env
