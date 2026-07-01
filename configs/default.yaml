@@ -27,7 +27,7 @@ training:
 models:
   - "cnn_lstm"
   - "i3d"
-  - "tsm"
+  - "simple_snn"
   - "mvit"
   - "transformer"
 

@@ -4,24 +4,27 @@ from src.models.base_model import BaseVideoModel
 
 
 class MViTPatchEmbedding(nn.Module):
-
-    def __init__(self, in_channels=3, embed_dim=768,
-                 patch_size=(2, 16, 16), frame_size=224):
+    def __init__(self, in_channels=3, embed_dim=128,
+                 patch_size_time=2, patch_size_hw=4,
+                 num_frames=4, frame_size=64):
         super(MViTPatchEmbedding, self).__init__()
 
-        self.patch_size = patch_size
         self.embed_dim = embed_dim
 
-        self.num_patches_t = frame_size // patch_size[0]
-        self.num_patches_h = frame_size // patch_size[1]
-        self.num_patches_w = frame_size // patch_size[2]
+        # Количество патчей по каждому измерению
+        self.num_patches_t = num_frames // patch_size_time
+        self.num_patches_h = frame_size // patch_size_hw
+        self.num_patches_w = frame_size // patch_size_hw
         self.num_patches = self.num_patches_t * self.num_patches_h * self.num_patches_w
+
+        print(f"MViT: num_patches_t={self.num_patches_t}, num_patches_h={self.num_patches_h}, "
+              f"num_patches_w={self.num_patches_w}, total={self.num_patches}")
 
         self.projection = nn.Conv3d(
             in_channels,
             embed_dim,
-            kernel_size=patch_size,
-            stride=patch_size
+            kernel_size=(patch_size_time, patch_size_hw, patch_size_hw),
+            stride=(patch_size_time, patch_size_hw, patch_size_hw)
         )
 
         self.positional_encoding = nn.Parameter(
@@ -30,27 +33,42 @@ class MViTPatchEmbedding(nn.Module):
         nn.init.trunc_normal_(self.positional_encoding, std=0.02)
 
     def forward(self, x):
-        x = self.projection(x)
+        # x: [batch, channels, frames, height, width]
+        x = self.projection(x)  # [batch, embed_dim, t, h, w]
         batch_size, embed_dim, t, h, w = x.shape
-        x = x.view(batch_size, embed_dim, -1)
-        x = x.permute(0, 2, 1)
-        x = x + self.positional_encoding
+
+        # Проверяем, что количество патчей совпадает
+        expected_patches = t * h * w
+        if expected_patches != self.num_patches:
+            print(f"Warning: expected {self.num_patches} patches, got {expected_patches}")
+
+        x = x.view(batch_size, embed_dim, -1)  # [batch, embed_dim, patches]
+        x = x.permute(0, 2, 1)  # [batch, patches, embed_dim]
+
+        # Обрезаем или дополняем positional_encoding при необходимости
+        if x.shape[1] != self.positional_encoding.shape[1]:
+            if x.shape[1] < self.positional_encoding.shape[1]:
+                pos_enc = self.positional_encoding[:, :x.shape[1], :]
+            else:
+                pos_enc = torch.cat([
+                    self.positional_encoding,
+                    torch.zeros(1, x.shape[1] - self.positional_encoding.shape[1], self.embed_dim).to(x.device)
+                ], dim=1)
+        else:
+            pos_enc = self.positional_encoding
+
+        x = x + pos_enc
         return x
 
 
 class MViTBlock(nn.Module):
-
-    def __init__(self, embed_dim, num_heads=8, mlp_ratio=4.0, dropout=0.1):
+    def __init__(self, embed_dim, num_heads=4, mlp_ratio=4.0, dropout=0.1):
         super(MViTBlock, self).__init__()
 
         self.norm1 = nn.LayerNorm(embed_dim)
         self.attention = nn.MultiheadAttention(
-            embed_dim,
-            num_heads,
-            dropout=dropout,
-            batch_first=True
+            embed_dim, num_heads, dropout=dropout, batch_first=True
         )
-
         self.norm2 = nn.LayerNorm(embed_dim)
         self.mlp = nn.Sequential(
             nn.Linear(embed_dim, int(embed_dim * mlp_ratio)),
@@ -59,7 +77,6 @@ class MViTBlock(nn.Module):
             nn.Linear(int(embed_dim * mlp_ratio), embed_dim),
             nn.Dropout(dropout)
         )
-
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
@@ -76,10 +93,9 @@ class MViTBlock(nn.Module):
 
 
 class MViT(BaseVideoModel):
-
-    def __init__(self, num_classes, num_frames=16, frame_size=224,
-                 embed_dim=384, num_heads=6, num_layers=6,
-                 patch_size=(2, 16, 16)):
+    def __init__(self, num_classes, num_frames=4, frame_size=64,
+                 embed_dim=128, num_heads=4, num_layers=2,
+                 patch_size_time=2, patch_size_hw=4):
         super(MViT, self).__init__(num_classes, num_frames)
         self.name = "MViT"
         self.embed_dim = embed_dim
@@ -87,7 +103,9 @@ class MViT(BaseVideoModel):
         self.patch_embed = MViTPatchEmbedding(
             in_channels=3,
             embed_dim=embed_dim,
-            patch_size=patch_size,
+            patch_size_time=patch_size_time,
+            patch_size_hw=patch_size_hw,
+            num_frames=num_frames,
             frame_size=frame_size
         )
 
@@ -104,10 +122,10 @@ class MViT(BaseVideoModel):
         self.norm = nn.LayerNorm(embed_dim)
         self.classifier = nn.Sequential(
             nn.Dropout(0.3),
-            nn.Linear(embed_dim, 512),
+            nn.Linear(embed_dim, 256),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(512, num_classes)
+            nn.Linear(256, num_classes)
         )
 
     def forward(self, x):
@@ -118,16 +136,17 @@ class MViT(BaseVideoModel):
 
         x = self.norm(x)
         x = x.mean(dim=1)
-
         logits = self.classifier(x)
         return logits
 
 
-def create_mvit(num_classes, num_frames=16):
+def create_mvit(num_classes, num_frames=4):
     return MViT(
         num_classes=num_classes,
         num_frames=num_frames,
-        embed_dim=384,
-        num_heads=6,
-        num_layers=6
+        embed_dim=128,
+        num_heads=4,
+        num_layers=2,
+        patch_size_time=2,
+        patch_size_hw=4
     )

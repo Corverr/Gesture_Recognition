@@ -4,9 +4,8 @@ from src.models.base_model import BaseVideoModel
 
 
 class TimeSformerPatchEmbedding(nn.Module):
-
-    def __init__(self, in_channels=3, embed_dim=768,
-                 patch_size=(16, 16), frame_size=224, num_frames=16):
+    def __init__(self, in_channels=3, embed_dim=384,
+                 patch_size=(8, 8), frame_size=112, num_frames=8):
         super(TimeSformerPatchEmbedding, self).__init__()
 
         self.patch_size = patch_size
@@ -60,17 +59,11 @@ class TimeSformerPatchEmbedding(nn.Module):
 
 
 class TimeSformerBlock(nn.Module):
-
     def __init__(self, embed_dim, num_heads=8, mlp_ratio=4.0, dropout=0.1):
         super(TimeSformerBlock, self).__init__()
 
-        self.norm1_space = nn.LayerNorm(embed_dim)
-        self.attention_space = nn.MultiheadAttention(
-            embed_dim, num_heads, dropout=dropout, batch_first=True
-        )
-
-        self.norm1_time = nn.LayerNorm(embed_dim)
-        self.attention_time = nn.MultiheadAttention(
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attention = nn.MultiheadAttention(
             embed_dim, num_heads, dropout=dropout, batch_first=True
         )
 
@@ -86,16 +79,9 @@ class TimeSformerBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        batch_size, num_tokens, embed_dim = x.shape
-
         residual = x
-        x = self.norm1_space(x)
-        attn_out, _ = self.attention_space(x, x, x)
-        x = residual + self.dropout(attn_out)
-
-        residual = x
-        x = self.norm1_time(x)
-        attn_out, _ = self.attention_time(x, x, x)
+        x = self.norm1(x)
+        attn_out, _ = self.attention(x, x, x)
         x = residual + self.dropout(attn_out)
 
         residual = x
@@ -107,10 +93,9 @@ class TimeSformerBlock(nn.Module):
 
 
 class TimeSformer(BaseVideoModel):
-
-    def __init__(self, num_classes, num_frames=16, frame_size=224,
-                 embed_dim=384, num_heads=6, num_layers=6,
-                 patch_size=(16, 16)):
+    def __init__(self, num_classes, num_frames=8, frame_size=112,
+                 embed_dim=384, num_heads=6, num_layers=4,
+                 patch_size=(8, 8)):
         super(TimeSformer, self).__init__(num_classes, num_frames)
         self.name = "TimeSformer"
         self.embed_dim = embed_dim
@@ -152,11 +137,10 @@ class TimeSformer(BaseVideoModel):
         x = x.mean(dim=1)
 
         logits = self.classifier(x)
-
         return logits
 
 
-def create_transformer(num_classes, num_frames=16):
+def create_transformer(num_classes, num_frames=8):
     return TimeSformer(
         num_classes=num_classes,
         num_frames=num_frames,
